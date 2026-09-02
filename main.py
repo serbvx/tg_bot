@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import logging
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -15,8 +16,20 @@ from yt_dlp import YoutubeDL
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("BOT_TOKEN", "8858324377:AAH_yy4akPd2rl0A4JBzKqhecC1oJwutnAI")
-
 URL_REGEX = r'(https?://[^\s]+)'
+
+# Минимальный веб-сервер для проходимости Health Check на Render
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -24,9 +37,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Я могу скачивать медиафайлы без водяных знаков из:\n"
         "• **TikTok**\n"
         "• **Instagram Reels**\n"
-        "• **YouTube Shorts / Videos**\n"
+        "• **YouTube Shorts**\n"
         "• **VK Clips**\n"
-        "• **Pinterest** и многих других!\n\n"
+        "• **Pinterest** и др.\n\n"
         "📥 **Просто отправь мне ссылку на видео.**"
     )
     keyboard = [[InlineKeyboardButton("ℹ️ Помощь", callback_data="help")]]
@@ -38,9 +51,8 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     help_text = (
         "📌 **Как пользоваться ботом:**\n"
-        "1. Скопируйте ссылку на видео из приложения.\n"
-        "2. Вставьте её сюда в чат.\n"
-        "3. Подождите несколько секунд, пока бот обработает и пришлет файл.\n\n"
+        "1. Скопируйте ссылку на видео.\n"
+        "2. Отправьте её в чат.\n\n"
         "⚠️ *Лимит размера файла в Telegram — 50 МБ.*"
     )
     await query.message.reply_text(help_text, parse_mode="Markdown")
@@ -83,7 +95,7 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if filename and os.path.exists(filename):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             if file_size > 49.5:
-                await status_msg.edit_text("❌ Файл слишком большой для отправки в Telegram (более 50 МБ).")
+                await status_msg.edit_text("❌ Файл превышает лимит 50 МБ.")
                 os.remove(filename)
                 return
 
@@ -91,25 +103,33 @@ async def download_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             with open(filename, 'rb') as f:
                 if filename.endswith(('.mp3', '.m4a', '.opus')):
-                    await update.message.reply_audio(audio=f, caption="⚡️ Скачано с помощью @MediaGrab_Robot")
+                    await update.message.reply_audio(audio=f, caption="⚡️ Скачано с помощью бота")
                 else:
-                    await update.message.reply_video(video=f, caption="⚡️ Скачано с помощью @MediaGrab_Robot")
+                    await update.message.reply_video(video=f, caption="⚡️ Скачано с помощью бота")
 
             await status_msg.delete()
             os.remove(filename)
         else:
-            await status_msg.edit_text("❌ Не удалось найти или обработать файл.")
+            await status_msg.edit_text("❌ Не удалось обработать файл.")
 
     except Exception as e:
         logging.error(f"Error downloading: {e}")
-        await status_msg.edit_text("❌ Ошибка при скачивании. Убедитесь, что ссылка корректна и доступ открыт.")
+        await status_msg.edit_text("❌ Ошибка при скачивании.")
         for file in os.listdir("."):
             if file.startswith(file_prefix):
                 os.remove(file)
 
-if __name__ == '__main__':
+async def main():
+    await start_web_server()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(help_callback, pattern="^help$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_media))
-    app.run_polling()
+    
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await asyncio.Event().wait()
+
+if __name__ == '__main__':
+    asyncio.run(main())
